@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Family Health</title>
+  <meta name="description" content="Private, offline family health record: medications, vitals, visits, vaccines and emergency info.">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Family Health">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="#/today" class="brand" aria-label="Family Health home">
+      <img src="icons/icon.svg" alt="" width="28" height="28">
+      <span>Family Health</span>
+    </a>
+    <span class="topbar-sub" id="topbar-sub"></span>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+
+  <button class="fab" data-action="quickAdd" aria-label="Add new entry">
+    <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>
+  </button>
+
+  <nav class="tabbar" aria-label="Main">
+    <a href="#/today" data-nav="today">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg>
+      <span>Today</span>
+    </a>
+    <a href="#/family" data-nav="family">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><circle cx="17" cy="9.5" r="2.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M14.5 20c.2-2.6 1.5-4.6 4-4.6 2 0 3.5 1.8 3.5 4.6"/></svg>
+      <span>Family</span>
+    </a>
+    <a href="#/meds" data-nav="meds">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8.5" width="18" height="7" rx="3.5" transform="rotate(-45 12 12)"/><path d="M9.5 9.5l5 5"/></svg>
+      <span>Meds</span>
+    </a>
+    <a href="#/visits" data-nav="visits">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
+      <span>Visits</span>
+    </a>
+    <a href="#/settings" data-nav="settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+      <span>Backup</span>
+    </a>
+  </nav>
+
+  <dialog id="modal" aria-labelledby="modal-title"></dialog>
+  <div id="lock" class="lock" hidden></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
