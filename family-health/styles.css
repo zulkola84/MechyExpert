@@ -291,3 +291,19 @@ input[type=color] { width: 60px; height: 40px; border: 1px solid var(--line); bo
   main { max-width: none; padding: 0; }
   .card, .ecard { box-shadow: none; break-inside: avoid; }
 }
+
+/* ---------- Medicine schedule table ---------- */
+.sched-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.sched { border-collapse: collapse; width: 100%; font-size: .85rem; }
+.sched th, .sched td { border: 1px solid var(--line); padding: 6px; text-align: center; vertical-align: middle; }
+.sched thead th { background: var(--surface-2); font-weight: 700; min-width: 84px; }
+.sched thead th .t { font-size: 1rem; color: var(--primary); font-variant-numeric: tabular-nums; }
+.sched thead th .d { font-weight: 500; color: var(--muted); font-size: .75rem; }
+.sched tbody th { position: sticky; left: 0; background: var(--surface); text-align: left; white-space: nowrap; font-weight: 600; }
+.sched tr.today th, .sched tr.today td { background: var(--primary-soft); }
+.sched td.off { color: var(--muted); }
+.sched .cell { width: 36px; height: 36px; border-radius: 8px; border: 2px solid var(--line); background: var(--surface); font-size: 1.05rem; font-weight: 800; cursor: pointer; color: #fff; }
+.sched .cell.taken { background: var(--ok); border-color: var(--ok); }
+.sched .cell.skipped { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.sched .cell:disabled { cursor: default; opacity: .6; }
+@media print { .sched-wrap { overflow: visible; border: 0; } .sched { font-size: 11pt; } .sched .cell { border-color: #555; } }
