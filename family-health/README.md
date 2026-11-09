@@ -55,8 +55,8 @@ python3 -m http.server 8080
 
 ### Install on your phones (recommended: GitHub Pages)
 
-1. In the repository on GitHub, go to **Settings → Pages**, choose *Deploy from a branch*, and pick the branch with folder `/ (root)`.
-2. Open `https://<your-username>.github.io/<repo>/family-health/` on your phone.
+1. Already set up: every push to `main` that changes `family-health/` deploys automatically via `.github/workflows/pages.yml`. (If Pages is not yet enabled, go to **Settings → Pages → Source: GitHub Actions** once.)
+2. Open **https://zulkola84.github.io/MechyExpert/** on your phone.
 3. **Android (Chrome):** menu → *Add to Home screen / Install app*. **iPhone (Safari):** Share → *Add to Home Screen*.
 
 Your health data is **not** stored on GitHub. Pages only serves the empty app; each phone keeps its own data locally.
