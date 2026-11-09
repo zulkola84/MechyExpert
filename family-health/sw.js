@@ -1,5 +1,5 @@
 // Offline cache for the app shell. Bump VERSION when any shell file changes.
-const VERSION = 'fh-v1';
+const VERSION = 'fh-v2';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {

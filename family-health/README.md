@@ -31,6 +31,8 @@ It is built for one household (for example you, your wife and two daughters) and
 - **Today screen**: everyone's doses for today, which you tick off. It also shows overdue doses, PRN logs, alerts (low stock, vaccines due, fever), the next 14 days of appointments and backup status.
 - **Readings**: weight, height (growth chart for the girls), temperature, blood pressure, heart rate, blood glucose and SpO₂, each with a chart.
 - **History**: clinic visits, hospital stays, illnesses, lab results, dental, eye and imaging, with photo and PDF attachments.
+- **Sick diary (illness episodes)**: when someone falls sick, record the symptoms, the doctor and diagnosis, the medicine given (linked straight into the daily checklist), the doctor's advice for recovery, and MC days. Then keep a short diary each day with condition (very unwell → recovered), symptoms, temperature, appetite, other remedies and notes. Doses ticked off are added to each day automatically, and a temperature chart covers the whole illness.
+- **Medicine schedule**: a printable days × times timetable for an illness or a person. Tick doses straight on it and stick it on the fridge.
 - **Vaccinations**: dose, date, batch number, where given, and next due date (shown on Today 30 days ahead).
 - **Appointments**: date and time, clinic, address, questions to ask, outcome afterwards, and export to your calendar.
 

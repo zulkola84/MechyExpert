@@ -7,8 +7,8 @@
  * 1. Storage (IndexedDB) + in-memory cache
  * ========================================================================= */
 const DB_NAME = 'family-health-vault';
-const DB_VERSION = 1;
-const STORES = ['members', 'medications', 'doses', 'vitals', 'appointments', 'vaccines', 'records', 'files', 'meta'];
+const DB_VERSION = 2;
+const STORES = ['members', 'medications', 'doses', 'vitals', 'appointments', 'vaccines', 'records', 'episodes', 'sicklogs', 'files', 'meta'];
 const CACHED = STORES.filter(s => s !== 'files'); // files hold blobs; loaded on demand
 const BACKUP_FORMAT = 'family-health-backup';
 const BACKUP_VERSION = 1;
@@ -21,7 +21,7 @@ function openDB() {
       const d = req.result;
       for (const s of STORES) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id' });
     };
-    req.onsuccess = () => resolve(_db = req.result);
+    req.onsuccess = () => { _db = req.result; _db.onversionchange = () => { _db.close(); location.reload(); }; resolve(_db); };
     req.onerror = () => reject(req.error);
   });
 }
@@ -151,6 +151,8 @@ const RELATIONS = ['Self', 'Spouse', 'Daughter', 'Son', 'Parent', 'Other'];
 const BLOOD_TYPES = ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'];
 const MED_FORMS = ['Tablet', 'Capsule', 'Syrup / liquid', 'Drops', 'Inhaler', 'Injection', 'Cream / ointment', 'Patch', 'Other'];
 const RECORD_TYPES = ['Clinic visit', 'Hospital', 'Illness / symptoms', 'Lab result', 'Dental', 'Eye', 'Imaging / scan', 'Note'];
+const CONDITIONS = { 1: ['Very unwell', 'danger', '😣'], 2: ['Unwell', 'warn', '🙁'], 3: ['About the same', '', '😐'], 4: ['Getting better', 'primary', '🙂'], 5: ['Recovered', 'ok', '😄'] };
+const APPETITE = ['', 'Eating normally', 'Eating less', 'Not eating', 'Drinking only'];
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const VITALS = {
@@ -429,9 +431,10 @@ function memberForm(existing) {
   });
 }
 
-function medForm(existing, memberId) {
+function medForm(existing, memberId, episodeId) {
   if (needMembers()) return;
-  const m = existing || { memberId: memberId || defaultMember(), frequency: 'daily', times: ['08:00'], startDate: todayISO(), form: 'Tablet', perDose: 1, active: true };
+  const ep = episodeId && S.episodes.find(e => e.id === episodeId);
+  const m = existing || { memberId: ep?.memberId || memberId || defaultMember(), episodeId: episodeId || '', frequency: 'daily', times: ['08:00'], startDate: todayISO(), form: 'Tablet', perDose: 1, active: true, prescriber: ep?.doctor || '' };
   openForm({
     title: existing ? 'Edit medication' : 'Add medication',
     values: m,
@@ -461,6 +464,7 @@ function medForm(existing, memberId) {
       { name: 'refillAt', label: 'Warn me when stock falls to', type: 'number', step: '1', min: 0, placeholder: '5' },
       { name: 'prescriber', label: 'Prescribed by', placeholder: 'Doctor / clinic' },
       { name: 'notes', label: 'Notes', type: 'textarea', placeholder: 'Side effects, how to store, etc.' },
+      { name: 'episodeId', label: 'Part of illness', type: 'select', options: [['', '— Not linked —'], ...sortBy(S.episodes, 'startDate', true).map(e => [e.id, `${firstName(member(e.memberId))}: ${e.title} (${fmtDate(e.startDate)})`])], hint: 'Link medicine the doctor gave for a sickness so it shows in that illness\'s diary and schedule.' },
       { name: 'active', label: 'Currently taking', type: 'checkbox' },
     ],
     onSave: async v => {
@@ -589,6 +593,110 @@ function recordForm(existing, memberId) {
   });
 }
 
+/* ---------- Illness episodes & daily sick logs ---------- */
+const episode = id => S.episodes.find(e => e.id === id);
+const episodeLogs = id => sortBy(S.sicklogs.filter(l => l.episodeId === id), 'date');
+const episodeMeds = id => S.medications.filter(m => m.episodeId === id);
+const dayOfIllness = (e, date = todayISO()) => Math.round((toDate(date) - toDate(e.startDate)) / 864e5) + 1;
+const ongoingEpisodes = () => sortBy(S.episodes.filter(e => e.status !== 'recovered'), 'startDate', true);
+
+function episodeForm(existing, memberId) {
+  if (needMembers()) return;
+  const e0 = existing || { memberId: memberId || defaultMember(), startDate: todayISO(), status: 'ongoing', symptoms: [] };
+  openForm({
+    title: existing ? 'Edit illness' : 'New illness / sick episode',
+    values: e0,
+    fields: [
+      { name: 'memberId', label: 'Who is sick', type: 'member', required: true },
+      { name: 'title', label: 'Short name', required: true, placeholder: 'e.g. Demam & batuk, Sakit perut' },
+      { name: 'startDate', label: 'Started on', type: 'date', required: true, max: todayISO() },
+      { name: 'symptoms', label: 'Symptoms', type: 'tags', placeholder: 'e.g. Fever, Cough, Runny nose, Vomiting', hint: 'Separate with commas.' },
+      { type: 'html', html: '<div class="field-row">' },
+      { name: 'doctor', label: 'Doctor / clinic', placeholder: 'e.g. Klinik Kesihatan, Dr. Lim' },
+      { name: 'visitDate', label: 'Date seen', type: 'date' },
+      { type: 'html', html: '</div>' },
+      { name: 'diagnosis', label: 'Diagnosis (what the doctor said)', placeholder: 'e.g. Viral fever, Tonsillitis' },
+      { name: 'advice', label: 'Doctor\'s advice / things to help recovery', type: 'textarea', rows: 4, placeholder: 'e.g. Rest, drink plenty of water, sponge if fever > 38 °C, finish all antibiotics, come back if fever after 3 days' },
+      { name: 'mcDays', label: 'MC / days off school', type: 'number', step: '1', min: 0 },
+      { name: 'notes', label: 'Other notes', type: 'textarea', rows: 2 },
+      { name: 'status', label: 'Status', type: 'select', options: [['ongoing', 'Still sick'], ['recovered', 'Recovered']] },
+      { name: 'endDate', label: 'Recovered on', type: 'date', showIf: { field: 'status', in: ['recovered'] } },
+    ],
+    onSave: async v => {
+      if (v.status === 'recovered' && !v.endDate) v.endDate = todayISO();
+      if (v.endDate && v.endDate < v.startDate) return 'Recovery date is before the start date.';
+      const saved = await save('episodes', { ...e0, ...v });
+      if (!existing) location.hash = `#/episode/${saved.id}`;
+      toast(existing ? 'Saved' : 'Illness recorded — now add the medicine the doctor gave');
+    },
+    onDelete: existing && (async () => {
+      if (!confirm(`Delete "${e0.title}" and its daily diary? Linked medicines are kept.`)) return false;
+      for (const l of S.sicklogs.filter(l => l.episodeId === e0.id)) await remove('sicklogs', l.id);
+      for (const m of episodeMeds(e0.id)) { m.episodeId = ''; await save('medications', m); }
+      await remove('episodes', e0.id);
+      location.hash = `#/member/${e0.memberId}/illness`;
+    }),
+  });
+}
+
+function sickLogForm(existing, episodeId, date) {
+  const ep = episode(existing?.episodeId || episodeId);
+  if (!ep) { toast('Record the illness first'); return; }
+  const d = date || todayISO();
+  if (!existing) {
+    const same = S.sicklogs.find(l => l.episodeId === ep.id && l.date === d);
+    if (same) return sickLogForm(same);
+  }
+  const prev = episodeLogs(ep.id).filter(l => l.date < d).pop();
+  const l0 = existing || { episodeId: ep.id, memberId: ep.memberId, date: d, condition: prev ? prev.condition : 2, symptoms: prev?.symptoms || ep.symptoms || [] };
+  if (existing && l0.vitalId) l0.temp = S.vitals.find(v => v.id === l0.vitalId)?.value ?? null;
+  const day = dayOfIllness(ep, l0.date);
+  openForm({
+    title: `${firstName(member(ep.memberId))} · ${ep.title}`,
+    intro: `<p class="muted" style="margin:0">Daily diary — how are they today? Medicines ticked off on the Today screen are added to this day automatically.</p>`,
+    values: l0,
+    fields: [
+      { name: 'date', label: `Date (day ${day} of illness)`, type: 'date', required: true, max: todayISO() },
+      { name: 'condition', label: 'How are they today?', type: 'select', options: Object.entries(CONDITIONS).map(([k, [t, , em]]) => [k, `${em} ${t}`]) },
+      { name: 'symptoms', label: 'Symptoms today', type: 'tags', hint: 'Remove the ones that are gone, add new ones.' },
+      { type: 'html', html: '<div class="field-row">' },
+      { name: 'temp', label: 'Temperature (°C)', type: 'number', step: '0.1', min: 30, max: 45 },
+      { name: 'appetite', label: 'Eating / drinking', type: 'select', options: APPETITE },
+      { type: 'html', html: '</div>' },
+      { name: 'otherMeds', label: 'Other medicine / remedies taken', placeholder: 'e.g. Ubat batuk herba, cool fever patch, honey' },
+      { name: 'notes', label: 'Notes', type: 'textarea', rows: 3, placeholder: 'e.g. Slept well, vomited once after lunch, went back to the clinic' },
+    ],
+    onSave: async v => {
+      v.condition = Number(v.condition);
+      const clash = S.sicklogs.find(l => l.episodeId === ep.id && l.date === v.date && l.id !== l0.id);
+      if (clash) return `There is already a diary entry for ${fmtDate(v.date)} — edit that one instead.`;
+      if (v.date < ep.startDate) return 'This date is before the illness started. Change the illness start date first.';
+      const temp = v.temp; delete v.temp;
+      const log = { ...l0, ...v };
+      delete log.temp;
+      if (temp != null) {
+        const old = log.vitalId && S.vitals.find(x => x.id === log.vitalId);
+        const at = old && old.at.slice(0, 10) === v.date ? old.at : `${v.date}T${v.date === todayISO() ? hhmm(new Date()) : '12:00'}`;
+        const vit = await save('vitals', { ...(old || {}), memberId: ep.memberId, type: 'temp', value: temp, at, notes: `Sick diary: ${ep.title}` });
+        log.vitalId = vit.id;
+      } else if (log.vitalId) {
+        await remove('vitals', log.vitalId);
+        log.vitalId = null;
+      }
+      await save('sicklogs', log);
+      if (v.condition === 5 && ep.status !== 'recovered' && confirm('Mark this illness as recovered?')) {
+        await save('episodes', { ...ep, status: 'recovered', endDate: v.date });
+      }
+      toast('Diary saved');
+    },
+    onDelete: existing && (async () => {
+      if (!confirm('Delete this diary entry?')) return false;
+      if (l0.vitalId) await remove('vitals', l0.vitalId);
+      await remove('sicklogs', l0.id);
+    }),
+  });
+}
+
 /* ---------- Files ---------- */
 async function shrinkImage(file, maxDim = 2000, quality = 0.85) {
   if (!/^image\/(jpeg|png|webp|heic|heif)$/i.test(file.type) || !window.createImageBitmap) return file;
@@ -626,7 +734,7 @@ async function hydrateThumbs() {
 }
 
 async function deleteMember(id) {
-  for (const store of ['medications', 'doses', 'vitals', 'appointments', 'vaccines', 'records']) {
+  for (const store of ['medications', 'doses', 'vitals', 'appointments', 'vaccines', 'records', 'episodes', 'sicklogs']) {
     for (const x of S[store].filter(x => x.memberId === id)) {
       if (store === 'records') for (const a of x.attachments || []) await idb.del('files', a.id);
       await remove(store, x.id);
@@ -727,7 +835,7 @@ let ui = { medsFilter: 'all', visitsFilter: 'all', showPastMeds: false, vitalTyp
 
 function currentRoute() {
   const [page = 'today', a, b] = location.hash.replace(/^#\/?/, '').split('/');
-  return { page: page || 'today', a: a && decodeURIComponent(a), b };
+  return { page: page || 'today', a: a && decodeURIComponent(a), b: b && decodeURIComponent(b) };
 }
 function currentMemberId() {
   const r = currentRoute();
@@ -816,6 +924,29 @@ function viewToday() {
   }
   html += `</div>`;
 
+  // ---- Currently unwell ----
+  const sick = ongoingEpisodes();
+  if (sick.length) {
+    html += `<div class="section"><div class="spread"><span class="section-title">Currently unwell</span></div>`;
+    for (const e of sick) {
+      const m = member(e.memberId);
+      const todayLog = S.sicklogs.find(l => l.episodeId === e.id && l.date === today);
+      const last = episodeLogs(e.id).pop();
+      const cond = last && CONDITIONS[last.condition];
+      html += `<div class="card tinted" style="--c:${safeColor(m?.color)}">
+        <a href="#/episode/${e.id}" style="color:inherit;text-decoration:none;display:block">
+          ${chip(m)} <span class="badge">Day ${dayOfIllness(e)}</span> ${cond ? `<span class="badge ${cond[1]}">${cond[2]} ${cond[0]}</span>` : ''}
+          <h3 style="margin-top:6px">${esc(e.title)}</h3>
+          ${(e.symptoms || []).length ? `<small>${esc((last?.symptoms || e.symptoms).join(', '))}</small>` : ''}
+        </a>
+        <div class="row wrap" style="margin-top:10px">
+          <button class="btn small ${todayLog ? '' : 'primary'}" data-action="addSickLog" data-episode="${e.id}">${todayLog ? '✓ Today\'s diary — edit' : '📝 Write today\'s diary'}</button>
+          <a class="btn small" href="#/schedule/e/${e.id}">🗓 Medicine schedule</a>
+        </div></div>`;
+    }
+    html += `</div>`;
+  }
+
   // ---- Upcoming appointments ----
   const upcoming = sortBy(S.appointments.filter(a => !a.done && a.at >= `${today}T00:00` && a.at <= `${addDays(today, 14)}T23:59`), 'at');
   html += `<div class="section"><div class="spread"><span class="section-title">Next 14 days</span><a href="#/visits" class="btn small ghost">All visits</a></div>`;
@@ -853,7 +984,7 @@ function viewFamily() {
 }
 
 /* ---------- Member detail ---------- */
-const MEMBER_TABS = [['overview', 'Overview'], ['meds', 'Medications'], ['vitals', 'Readings'], ['history', 'History'], ['vaccines', 'Vaccines'], ['visits', 'Visits']];
+const MEMBER_TABS = [['overview', 'Overview'], ['meds', 'Medications'], ['illness', 'Sick diary'], ['vitals', 'Readings'], ['history', 'History'], ['vaccines', 'Vaccines'], ['visits', 'Visits']];
 
 function viewMember(id, tab = 'overview') {
   const m = member(id);
@@ -873,6 +1004,7 @@ function viewMember(id, tab = 'overview') {
     case 'history': html += memberHistory(m); break;
     case 'vaccines': html += memberVaccines(m); break;
     case 'visits': html += memberVisits(m); break;
+    case 'illness': html += memberIllness(m); break;
     default: html += memberOverview(m);
   }
   return html;
@@ -928,6 +1060,7 @@ function medCard(x, showMember) {
       ${!active ? ' <span class="badge">Stopped</span>' : ''}
       <div><small>${esc(scheduleText(x))}${x.instructions ? ' · ' + esc(x.instructions) : ''}</small></div>
       ${x.purpose ? `<div><small>For: ${esc(x.purpose)}</small></div>` : ''}
+      ${x.episodeId && episode(x.episodeId) && currentRoute().page !== 'episode' ? `<div><small>🤒 <a href="#/episode/${x.episodeId}">${esc(episode(x.episodeId).title)}</a></small></div>` : ''}
       ${x.endDate ? `<div><small>Until ${fmtDate(x.endDate)}</small></div>` : ''}
     </div></div>
     ${x.stock != null ? `<div style="margin-top:8px"><small>${low ? '⚠ ' : ''}${x.stock} left${low ? ' — time to refill' : ''}</small></div>` : ''}
@@ -943,7 +1076,7 @@ function memberMeds(m) {
   const all = S.medications.filter(x => x.memberId === m.id);
   const cur = sortBy(all.filter(x => medActiveOn(x, todayISO())), 'name');
   const past = sortBy(all.filter(x => !medActiveOn(x, todayISO())), 'updatedAt', true);
-  let html = `<div class="spread"><span class="section-title">Current</span><button class="btn small primary" data-action="addMed" data-member="${m.id}">+ Medication</button></div><div style="margin-top:10px">`;
+  let html = `<div class="spread"><span class="section-title">Current</span><div class="row">${cur.some(x => x.frequency !== 'prn') ? `<a class="btn small" href="#/schedule/m/${m.id}">🗓 Schedule</a>` : ''}<button class="btn small primary" data-action="addMed" data-member="${m.id}">+ Medication</button></div></div><div style="margin-top:10px">`;
   html += cur.length ? cur.map(x => medCard(x)).join('') : `<div class="empty">No current medications.</div>`;
   html += `</div>`;
   if (past.length) html += `<div class="section"><span class="section-title">Past / stopped</span><div style="margin-top:10px">${past.map(x => medCard(x)).join('')}</div></div>`;
@@ -1093,6 +1226,161 @@ function viewVisits() {
   return html;
 }
 
+/* ---------- Illness episodes ---------- */
+function episodeCard(e) {
+  const last = episodeLogs(e.id).pop();
+  const cond = last && CONDITIONS[last.condition];
+  const days = e.status === 'recovered' && e.endDate ? dayOfIllness(e, e.endDate) : dayOfIllness(e);
+  return `<a class="card link" href="#/episode/${e.id}">
+    <div class="spread"><div class="grow">
+      <small>${fmtDate(e.startDate)}${e.endDate ? ' – ' + fmtDate(e.endDate) : ''} · ${days} day${days > 1 ? 's' : ''}</small>
+      <h3>${esc(e.title)}</h3>
+      ${e.diagnosis ? `<div><small><strong>${esc(e.diagnosis)}</strong>${e.doctor ? ' · ' + esc(e.doctor) : ''}</small></div>` : ''}
+    </div>
+    ${e.status === 'recovered' ? '<span class="badge ok">Recovered</span>' : cond ? `<span class="badge ${cond[1]}">${cond[2]} ${cond[0]}</span>` : '<span class="badge warn">Sick</span>'}
+    </div></a>`;
+}
+
+function memberIllness(m) {
+  const list = S.episodes.filter(e => e.memberId === m.id);
+  const cur = sortBy(list.filter(e => e.status !== 'recovered'), 'startDate', true);
+  const past = sortBy(list.filter(e => e.status === 'recovered'), 'startDate', true);
+  return `<div class="spread"><span class="section-title">Sick now</span><button class="btn small primary" data-action="addEpisode" data-member="${m.id}">+ New illness</button></div>
+    <div style="margin-top:10px">${cur.length ? cur.map(episodeCard).join('') : '<div class="empty">Not sick right now 🎉<br><small>When someone falls sick, record the symptoms, what the doctor gave, and a short diary each day until they recover.</small></div>'}</div>
+    ${past.length ? `<div class="section"><span class="section-title">Past illnesses</span><div style="margin-top:10px">${past.map(episodeCard).join('')}</div></div>` : ''}`;
+}
+
+function viewEpisode(id) {
+  const e = episode(id);
+  if (!e) return `<div class="empty">Not found. <a href="#/family">Back</a></div>`;
+  const m = member(e.memberId);
+  const today = todayISO();
+  const meds = episodeMeds(e.id);
+  const logs = episodeLogs(e.id);
+  const logByDate = new Map(logs.map(l => [l.date, l]));
+  const medIds = new Set(meds.map(x => x.id));
+  const recovered = e.status === 'recovered';
+  const lastDate = recovered && e.endDate ? e.endDate : today;
+
+  let html = `<div class="row no-print" style="margin-bottom:12px"><a class="btn small" href="#/member/${e.memberId}/illness">← ${esc(firstName(m))}</a></div>
+  <div class="card tinted" style="--c:${safeColor(m?.color)}">
+    <div class="spread"><div class="grow">${chip(m)} ${recovered ? '<span class="badge ok">Recovered</span>' : `<span class="badge warn">Day ${dayOfIllness(e)}</span>`}
+      <h1 style="margin-top:8px">${esc(e.title)}</h1>
+      <small>Started ${fmtDate(e.startDate)}${e.endDate ? ` · recovered ${fmtDate(e.endDate)}` : ''}${e.mcDays ? ` · MC ${e.mcDays} day(s)` : ''}</small></div></div>
+    ${(e.symptoms || []).length ? `<div class="row wrap" style="gap:6px;margin-top:10px">${e.symptoms.map(s => `<span class="badge">${esc(s)}</span>`).join('')}</div>` : ''}
+    <div class="row wrap" style="margin-top:12px">
+      <button class="btn small" data-action="editEpisode" data-id="${e.id}">Edit</button>
+      ${recovered ? '' : `<button class="btn small" data-action="recoverEpisode" data-id="${e.id}">✓ Mark recovered</button>`}
+    </div></div>`;
+
+  // Doctor
+  html += `<div class="section"><span class="section-title">Doctor</span><div class="card" style="margin-top:10px">
+    ${e.doctor || e.diagnosis || e.visitDate ? `<dl class="kv">
+      ${e.doctor ? `<dt>Seen by</dt><dd>${esc(e.doctor)}${e.visitDate ? ` · ${fmtDate(e.visitDate)}` : ''}</dd>` : ''}
+      ${e.diagnosis ? `<dt>Diagnosis</dt><dd><strong>${esc(e.diagnosis)}</strong></dd>` : ''}
+      ${e.notes ? `<dt>Notes</dt><dd>${esc(e.notes)}</dd>` : ''}</dl>` : `<span class="muted">Not seen by a doctor yet. <a href="#" data-action="editEpisode" data-id="${e.id}">Add details</a></span>`}
+  </div></div>`;
+
+  // Advice
+  html += `<div class="section"><span class="section-title">To help recovery</span>
+    ${e.advice ? `<div class="card alert-ok flat prewrap" style="margin-top:10px">${esc(e.advice)}</div>` : `<div class="empty" style="margin-top:10px">Write down the doctor's advice: rest, fluids, what to watch out for. <a href="#" data-action="editEpisode" data-id="${e.id}">Add advice</a></div>`}</div>`;
+
+  // Medicines
+  html += `<div class="section"><div class="spread"><span class="section-title">Medicine given</span>
+    <div class="row">${meds.some(x => x.frequency !== 'prn') ? `<a class="btn small" href="#/schedule/e/${e.id}">🗓 Schedule</a>` : ''}
+    <button class="btn small primary" data-action="addMed" data-episode="${e.id}">+ Medicine</button></div></div>
+    <div style="margin-top:10px">${meds.length ? meds.map(x => medCard(x)).join('') : '<div class="empty">Add each medicine the doctor gave: name, dose, times and how many days. It goes straight into the daily checklist and schedule.</div>'}</div></div>`;
+
+  // Charts
+  const temps = sortBy(S.vitals.filter(v => v.memberId === e.memberId && v.type === 'temp' && v.at.slice(0, 10) >= e.startDate && v.at.slice(0, 10) <= lastDate), 'at');
+  if (temps.length >= 2) html += `<div class="section"><span class="section-title">Temperature (°C)</span><div class="card" style="margin-top:10px">${lineChart(temps, VITALS.temp)}</div></div>`;
+
+  // Daily diary
+  html += `<div class="section"><div class="spread"><span class="section-title">Daily diary</span>
+    ${recovered ? '' : `<button class="btn small primary" data-action="addSickLog" data-episode="${e.id}">📝 Today</button>`}</div>`;
+  const nDays = Math.min(60, dayOfIllness(e, lastDate));
+  for (let i = nDays - 1; i >= 0; i--) {
+    const date = addDays(e.startDate, i);
+    const log = logByDate.get(date);
+    const doses = sortBy(S.doses.filter(d => d.date === date && (medIds.has(d.medId))), 'time');
+    const dayTemps = temps.filter(t => t.at.slice(0, 10) === date && t.id !== log?.vitalId);
+    const cond = log && CONDITIONS[log.condition];
+    const logTemp = log?.vitalId && S.vitals.find(v => v.id === log.vitalId);
+    const taken = doses.filter(d => d.status === 'taken'), skipped = doses.filter(d => d.status === 'skipped');
+    const medName = d => esc(S.medications.find(x => x.id === d.medId)?.name || '?');
+    html += `<div class="card">
+      <div class="spread"><div><strong>Day ${i + 1}</strong> <small>· ${fmtDate(date, { weekday: 'short', day: 'numeric', month: 'short' })}</small></div>
+        ${cond ? `<span class="badge ${cond[1]}">${cond[2]} ${cond[0]}</span>` : ''}</div>
+      ${log ? `
+        ${(log.symptoms || []).length ? `<div style="margin-top:6px"><small class="muted">Symptoms:</small> ${esc(log.symptoms.join(', '))}</div>` : ''}
+        ${logTemp || log.appetite ? `<div><small class="muted">${[logTemp && `🌡 ${esc(logTemp.value)} °C`, log.appetite && `🍚 ${esc(log.appetite)}`].filter(Boolean).join(' · ')}</small></div>` : ''}
+        ${log.otherMeds ? `<div><small class="muted">Other:</small> ${esc(log.otherMeds)}</div>` : ''}
+        ${log.notes ? `<p class="prewrap" style="margin:6px 0 0">${esc(log.notes)}</p>` : ''}` : ''}
+      ${dayTemps.length ? `<div><small class="muted">🌡 ${dayTemps.map(t => `${esc(t.value)} °C at ${esc(t.at.slice(11, 16))}`).join(', ')}</small></div>` : ''}
+      ${taken.length ? `<div style="margin-top:6px"><small class="muted">💊 Taken:</small> <small>${taken.map(d => `${medName(d)} ${esc(d.time)}`).join(', ')}</small></div>` : ''}
+      ${skipped.length ? `<div><small class="muted">Missed:</small> <small style="color:var(--warn)">${skipped.map(d => `${medName(d)} ${esc(d.time)}`).join(', ')}</small></div>` : ''}
+      <div style="margin-top:8px"><button class="btn small ${log ? '' : 'ghost'}" data-action="${log ? 'editSickLog' : 'addSickLog'}" data-id="${log?.id || ''}" data-episode="${e.id}" data-date="${date}">${log ? 'Edit' : '+ Write diary for this day'}</button></div>
+    </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+/* ---------- Medicine schedule (printable timetable) ---------- */
+function viewSchedule(kind, id) {
+  const today = todayISO();
+  let meds, title, back, start, end;
+  if (kind === 'e') {
+    const e = episode(id);
+    if (!e) return '<div class="empty">Not found.</div>';
+    meds = episodeMeds(id).filter(m => m.active !== false);
+    title = `${esc(member(e.memberId)?.name)} — ${esc(e.title)}`;
+    back = `#/episode/${id}`;
+  } else {
+    const m = member(id);
+    if (!m) return '<div class="empty">Not found.</div>';
+    meds = S.medications.filter(x => x.memberId === id && x.active !== false && (!x.endDate || x.endDate >= today));
+    title = esc(m.name);
+    back = `#/member/${id}/meds`;
+  }
+  const regular = meds.filter(x => x.frequency !== 'prn');
+  const prn = meds.filter(x => x.frequency === 'prn');
+  if (kind === 'e' && regular.length) {
+    start = regular.map(x => x.startDate || today).sort()[0];
+    end = regular.map(x => x.endDate || addDays(x.startDate || today, 6)).sort().pop();
+  } else { start = today; end = addDays(today, 6); }
+  if (end < start) end = start;
+  const nDays = Math.min(31, Math.round((toDate(end) - toDate(start)) / 864e5) + 1);
+
+  const slots = sortBy(regular.flatMap(x => (x.times || []).map(t => ({ med: x, time: t }))), s => s.time + s.med.name);
+  const idx = doseIndex();
+  let html = `<div class="row no-print" style="margin-bottom:12px"><a class="btn small" href="${back}">← Back</a><span class="grow"></span>
+    <button class="btn small" data-action="print">🖨 Print</button></div>
+    <h1>Medicine schedule</h1><div class="muted" style="margin-bottom:12px">${title} · ${fmtDate(start)} – ${fmtDate(addDays(start, nDays - 1))}</div>`;
+  if (!slots.length && !prn.length) return html + '<div class="empty">No medicines to schedule yet.</div>';
+
+  if (slots.length) {
+    html += `<div class="sched-wrap"><table class="sched"><thead><tr><th>Day</th>${slots.map(s => `<th><div class="t">${esc(s.time)}</div>${esc(s.med.name)}${s.med.dose ? `<div class="d">${esc(s.med.dose)}</div>` : ''}${s.med.instructions ? `<div class="d">${esc(s.med.instructions)}</div>` : ''}</th>`).join('')}</tr></thead><tbody>`;
+    for (let i = 0; i < nDays; i++) {
+      const date = addDays(start, i);
+      const dow = toDate(date).getDay();
+      html += `<tr class="${date === today ? 'today' : ''}"><th>${fmtDate(date, { weekday: 'short', day: 'numeric', month: 'short' })}</th>`;
+      for (const s of slots) {
+        const on = medActiveOn(s.med, date) && (s.med.frequency !== 'days' || (s.med.days || []).includes(dow));
+        if (!on) { html += '<td class="off">–</td>'; continue; }
+        const did = `${s.med.id}|${date}|${s.time}`;
+        const st = idx.get(did)?.status;
+        const future = date > today;
+        html += `<td><button class="cell ${st || ''}" ${future ? 'disabled' : ''} data-action="dose" data-id="${esc(did)}" data-status="taken" aria-label="${esc(s.med.name)} ${esc(s.time)} ${date}">${st === 'taken' ? '✓' : st === 'skipped' ? '✕' : ''}</button></td>`;
+      }
+      html += '</tr>';
+    }
+    html += `</tbody></table></div><p class="muted no-print" style="font-size:.85rem">Tap a box to tick a dose taken (tap again to undo). Print it and stick it on the fridge so everyone knows.</p>`;
+  }
+  if (prn.length) html += `<div class="section"><span class="section-title">Only when needed</span><div class="card" style="margin-top:10px">${prn.map(x => `<div class="dose"><div class="grow"><strong>${esc(x.name)}</strong> ${esc(x.dose || '')}<br><small>${esc(scheduleText(x))}${x.purpose ? ' · for ' + esc(x.purpose) : ''}</small></div></div>`).join('')}</div></div>`;
+  return html;
+}
+
 /* ---------- Emergency card ---------- */
 function viewEmergency(id) {
   const m = member(id);
@@ -1179,12 +1467,14 @@ function render() {
     case 'visits': html = viewVisits(); break;
     case 'settings': html = viewSettings(); break;
     case 'emergency': html = viewEmergency(a); break;
+    case 'episode': html = viewEpisode(a); break;
+    case 'schedule': html = viewSchedule(a, b); break;
     default: html = viewToday();
   }
   $('#view').innerHTML = html;
-  const navKey = page === 'member' || page === 'emergency' ? 'family' : page;
+  const navKey = ['member', 'emergency', 'episode', 'schedule'].includes(page) ? 'family' : page;
   document.querySelectorAll('[data-nav]').forEach(n => n.classList.toggle('active', n.dataset.nav === navKey || (navKey === 'today' && n.dataset.nav === 'today' && !['family', 'meds', 'visits', 'settings'].includes(page))));
-  $('.fab').hidden = page === 'settings' || page === 'emergency';
+  $('.fab').hidden = ['settings', 'emergency', 'schedule'].includes(page);
   hydrateThumbs();
   if (page === 'settings') showPersistStatus();
 }
@@ -1215,6 +1505,8 @@ const actions = {
       ${item('addMed', '💊', 'Medication')}
       ${item('addRecord', '📝', 'Sick day, clinic visit or lab result')}
       ${item('addAppt', '📅', 'Appointment')}
+      ${item('addEpisode', '🤒', 'Someone is sick (symptoms, doctor, medicine)')}
+      ${ongoingEpisodes().filter(e => !mid || e.memberId === mid).map(e => `<button class="btn" data-action="addSickLog" data-episode="${e.id}"><span class="em">📝</span>Today's diary: ${esc(firstName(member(e.memberId)))} — ${esc(e.title)}</button>`).join('')}
       ${item('addVaccine', '💉', 'Vaccination')}
       ${mid ? '' : item('addMember', '👤', 'Family member')}
     </div>`);
@@ -1232,7 +1524,7 @@ const actions = {
 
   addMember: () => memberForm(),
   editMember: d => memberForm(find('members', d.id)),
-  addMed: d => medForm(null, d.member),
+  addMed: d => medForm(null, d.member, d.episode),
   editMed: d => medForm(find('medications', d.id)),
   addVital: d => vitalForm(null, d.member, d.type),
   editVital: d => vitalForm(find('vitals', d.id)),
@@ -1241,6 +1533,21 @@ const actions = {
   addVaccine: d => vaccineForm(null, d.member),
   editVaccine: d => vaccineForm(find('vaccines', d.id)),
   addRecord: d => recordForm(null, d.member),
+  addEpisode: d => episodeForm(null, d.member),
+  editEpisode: d => episodeForm(episode(d.id)),
+  addSickLog: d => sickLogForm(null, d.episode, d.date),
+  editSickLog: d => sickLogForm(find('sicklogs', d.id)),
+  recoverEpisode: async d => {
+    const e = episode(d.id);
+    e.status = 'recovered'; e.endDate = todayISO();
+    await save('episodes', e);
+    const running = episodeMeds(e.id).filter(m => medActiveOn(m, todayISO()) && !m.endDate);
+    if (running.length && confirm(`Stop the medicines for this illness too?\n${running.map(m => '• ' + m.name).join('\n')}`)) {
+      for (const m of running) { m.endDate = todayISO(); await save('medications', m); }
+    }
+    toast('Alhamdulillah — marked as recovered');
+    render();
+  },
   editRecord: d => recordForm(find('records', d.id)),
 
   dose: d => setDose(d.id, d.status),
